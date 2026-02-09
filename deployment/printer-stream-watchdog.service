@@ -1,0 +1,6 @@
+[Unit]
+Description=Printer Stream Watchdog (restarts ffmpeg if stream goes stale)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/3d-printer/deployment/printer-stream-watchdog.sh

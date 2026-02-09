@@ -1,0 +1,25 @@
+# Dependencies
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.deploy
+.env.local
+.env.secrets
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Go
+backend/server
+
+# Docker
+*.log

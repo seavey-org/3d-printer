@@ -1,0 +1,58 @@
+[Unit]
+Description=FFmpeg RTSP Printer Stream Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+StartLimitBurst=0
+TimeoutStartSec=30
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+
+RestartKillSignal=SIGKILL
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=200%
+
+WorkingDirectory=/var/www/printer-camera/live
+Environment=FFREPORT=file=/var/log/ffmpeg-printer-stream.log:level=32
+EnvironmentFile=/opt/3d-printer/.env.secrets
+
+# Key changes from the old config:
+# 1. -timeout 5000000: 5s RTSP socket I/O timeout (catches hung connections)
+# 2. -f hls instead of -f segment: proper HLS muxer with lifecycle management
+# 3. -hls_time 2: 2s segments instead of 10s (reduces latency from ~50s to ~6s)
+# 4. -hls_flags delete_segments: auto-cleanup of old .ts files
+# 5. -hls_list_size 5: keep 5 segments in playlist (10s of content)
+ExecStart=/usr/bin/ffmpeg \
+  -loglevel info \
+  -timeout 5000000 \
+  -hwaccel auto \
+  -i ${PRINTER_RTSP_URL} \
+  -c:v libx264 \
+  -preset ultrafast \
+  -tune zerolatency \
+  -b:v 6000k \
+  -maxrate 6000k \
+  -bufsize 3000k \
+  -g 30 \
+  -keyint_min 30 \
+  -c:a copy \
+  -map 0:v \
+  -map 0:a? \
+  -avoid_negative_ts make_zero \
+  -f hls \
+  -hls_time 2 \
+  -hls_list_size 5 \
+  -hls_flags delete_segments \
+  -hls_segment_filename /var/www/printer-camera/live/segment%%03d.ts \
+  -y \
+  /var/www/printer-camera/live/stream.m3u8
+
+[Install]
+WantedBy=multi-user.target

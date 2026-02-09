@@ -1,0 +1,198 @@
+name: App CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - 'deployment/**'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'Dockerfile'
+      - '.github/workflows/ci-cd.yml'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy after build'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  check-changes:
+    runs-on: [self-hosted, fedora]
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      deployment: ${{ steps.filter.outputs.deployment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'Dockerfile'
+            frontend:
+              - 'frontend/**'
+              - 'Dockerfile'
+            deployment:
+              - 'deployment/**'
+              - 'docker-compose*.yml'
+
+  # ============== BACKEND ==============
+  lint-backend:
+    runs-on: [self-hosted, fedora]
+    needs: check-changes
+    if: needs.check-changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run golangci-lint
+        run: |
+          export PATH="/usr/local/go/bin:/home/cody/go/bin:$PATH"
+          curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.8.0
+          golangci-lint run --timeout=5m
+
+  test-backend:
+    runs-on: [self-hosted, fedora]
+    needs: check-changes
+    if: needs.check-changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: |
+          export PATH="/usr/local/go/bin:/home/cody/go/bin:$PATH"
+          go test -race -coverprofile=coverage.out ./...
+
+  # ============== FRONTEND ==============
+  lint-build-frontend:
+    runs-on: [self-hosted, fedora]
+    needs: check-changes
+    if: needs.check-changes.outputs.frontend == 'true' || needs.check-changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: npm ci
+      - name: Run ESLint
+        run: npm run lint
+      - name: Type check
+        run: npm run type-check
+      - name: Build
+        run: npm run build
+
+  # ============== BUILD & DEPLOY (all on the same production server) ==============
+  build-deploy:
+    runs-on: [self-hosted, fedora]
+    needs: [check-changes, lint-backend, lint-build-frontend, test-backend]
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy)) &&
+      github.ref == 'refs/heads/main' &&
+      (needs.lint-backend.result == 'success' || needs.lint-backend.result == 'skipped') &&
+      (needs.lint-build-frontend.result == 'success' || needs.lint-build-frontend.result == 'skipped') &&
+      (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped')
+    environment: production
+    env:
+      APP_DIR: "/opt/3d-printer"
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image locally
+        run: docker build -t 3d-printer-app:${{ github.sha }} -t 3d-printer-app:latest .
+
+      - name: Copy deployment files
+        run: |
+          mkdir -p $APP_DIR/deployment
+          cp docker-compose.yml $APP_DIR/
+          cp deployment/*.service deployment/*.timer deployment/*.conf deployment/*.sh $APP_DIR/deployment/ 2>/dev/null || true
+          echo "IMAGE_TAG=${{ github.sha }}" > $APP_DIR/.env.deploy
+
+      - name: Write secrets file
+        env:
+          PRINTER_RTSP_URL: ${{ secrets.PRINTER_RTSP_URL }}
+          PRINTER_FTP_HOST: ${{ secrets.PRINTER_FTP_HOST }}
+          PRINTER_FTP_USER: ${{ secrets.PRINTER_FTP_USER }}
+          PRINTER_FTP_PASSWORD: ${{ secrets.PRINTER_FTP_PASSWORD }}
+        run: |
+          printf 'PRINTER_RTSP_URL=%s\nPRINTER_FTP_HOST=%s\nPRINTER_FTP_USER=%s\nPRINTER_FTP_PASSWORD=%s\n' \
+            "$PRINTER_RTSP_URL" "$PRINTER_FTP_HOST" "$PRINTER_FTP_USER" "$PRINTER_FTP_PASSWORD" \
+            > $APP_DIR/.env.secrets
+          chmod 600 $APP_DIR/.env.secrets
+
+      - name: Deploy
+        run: |
+          cd $APP_DIR
+
+          # Update compose to use local image
+          IMAGE_TAG=${{ github.sha }} docker compose down --remove-orphans || true
+          docker rm -f printer-backend 2>/dev/null || true
+
+          IMAGE_TAG=${{ github.sha }} docker compose up -d
+
+      - name: Verify health
+        run: |
+          sleep 5
+          cd $APP_DIR && docker compose ps
+          for i in 1 2 3; do
+            curl -sf http://localhost:3086/health && echo " - Health OK" && break
+            echo "Attempt $i failed, retrying..." && sleep 3
+          done
+
+      - name: Setup systemd/nginx (if changed)
+        if: needs.check-changes.outputs.deployment == 'true'
+        run: |
+          # Docker compose service
+          sudo cp $APP_DIR/deployment/printer-docker.service /etc/systemd/system/
+          sudo systemctl daemon-reload && sudo systemctl enable printer-docker
+
+          # ffmpeg stream service
+          sudo cp $APP_DIR/deployment/ffmpeg-printer-stream.service /etc/systemd/system/
+          sudo systemctl daemon-reload && sudo systemctl restart ffmpeg-printer-stream
+
+          # Stream watchdog
+          sudo cp $APP_DIR/deployment/printer-stream-watchdog.service /etc/systemd/system/
+          sudo cp $APP_DIR/deployment/printer-stream-watchdog.timer /etc/systemd/system/
+          sudo chmod +x $APP_DIR/deployment/printer-stream-watchdog.sh
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now printer-stream-watchdog.timer
+
+          # Timelapse sync
+          sudo cp $APP_DIR/deployment/printer-timelapse-sync.service /etc/systemd/system/
+          sudo cp $APP_DIR/deployment/printer-timelapse-sync.timer /etc/systemd/system/
+          sudo chmod +x $APP_DIR/deployment/printer-timelapse-sync.sh
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now printer-timelapse-sync.timer
+
+          # nginx
+          sudo cp $APP_DIR/deployment/printer.seavey.dev.conf /etc/nginx/sites-available/
+          sudo ln -sf /etc/nginx/sites-available/printer.seavey.dev.conf /etc/nginx/sites-enabled/
+          sudo nginx -t && sudo systemctl reload nginx
+
+      - name: Clean up old images
+        run: docker image prune -af --filter 'until=168h' || true
+
+      - name: Summary
+        run: |
+          echo "=== Deployed ${{ github.sha }} ==="
+          echo "URL: https://printer.seavey.dev"
+          cd $APP_DIR && docker compose ps

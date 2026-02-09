@@ -1,0 +1,25 @@
+# 3D Printer Dashboard - Docker Compose
+#
+# Production (built and run on same server):
+#   IMAGE_TAG=<commit-sha> docker compose up -d
+#
+# Data is served via bind mounts from host filesystem:
+#   - Timelapse videos: /var/www/printer-timelapses (read-only)
+#   - HLS stream manifest: /var/www/printer-camera/live (read-only)
+
+services:
+  app:
+    image: 3d-printer-app:${IMAGE_TAG:-latest}
+    container_name: printer-backend
+    ports:
+      - "127.0.0.1:3086:8080"
+    environment:
+      - PORT=8080
+      - TIMELAPSE_DIR=/app/videos
+      - STREAM_M3U8_PATH=/app/live/stream.m3u8
+      - FRONTEND_DIST_PATH=/app/frontend/dist
+      - GIN_MODE=release
+    volumes:
+      - /var/www/printer-timelapses:/app/videos:ro
+      - /var/www/printer-camera/live:/app/live:ro
+    restart: always
