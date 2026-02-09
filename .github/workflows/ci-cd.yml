@@ -154,9 +154,10 @@ jobs:
           sleep 5
           cd $APP_DIR && docker compose ps
           for i in 1 2 3; do
-            curl -sf http://localhost:3086/health && echo " - Health OK" && break
+            curl -sf http://localhost:3086/health && echo " - Health OK" && exit 0
             echo "Attempt $i failed, retrying..." && sleep 3
           done
+          echo "Health check failed after 3 attempts!" && exit 1
 
       - name: Setup systemd/nginx (if changed)
         if: needs.check-changes.outputs.deployment == 'true'
@@ -189,7 +190,7 @@ jobs:
           sudo nginx -t && sudo systemctl reload nginx
 
       - name: Clean up old images
-        run: docker image prune -af --filter 'until=168h' || true
+        run: docker images '3d-printer-app' --format '{{.ID}} {{.CreatedAt}}' | sort -k2 -r | tail -n +4 | awk '{print $1}' | xargs -r docker rmi || true
 
       - name: Summary
         run: |

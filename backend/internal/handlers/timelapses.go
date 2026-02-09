@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,25 +16,28 @@ import (
 	"github.com/codyseavey/3d-printer/backend/internal/models"
 )
 
-var timelapseDir string
+// filenameDateRegex matches filenames like video_2024-07-24_09-14-01.mp4
+var filenameDateRegex = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})`)
 
-// datePattern matches filenames like video_2024-07-24_09-14-01.mp4
-var datePattern = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})`)
-
-func InitTimelapseHandler(dir string) {
-	timelapseDir = dir
+type TimelapseHandler struct {
+	dir string
 }
 
-func ListTimelapses(c *gin.Context) {
-	entries, err := os.ReadDir(timelapseDir)
+func NewTimelapseHandler(dir string) *TimelapseHandler {
+	return &TimelapseHandler{dir: dir}
+}
+
+func (h *TimelapseHandler) List(c *gin.Context) {
+	entries, err := os.ReadDir(h.dir)
 	if err != nil {
+		log.Printf("timelapses: failed to read directory %s: %v", h.dir, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read timelapse directory"})
 		return
 	}
 
 	// Build a set of thumbnail filenames for fast lookup
 	thumbnails := make(map[string]bool)
-	thumbDir := filepath.Join(timelapseDir, "thumbnail")
+	thumbDir := filepath.Join(h.dir, "thumbnail")
 	thumbEntries, err := os.ReadDir(thumbDir)
 	if err == nil {
 		for _, e := range thumbEntries {
@@ -42,7 +47,7 @@ func ListTimelapses(c *gin.Context) {
 		}
 	}
 
-	var timelapses []models.Timelapse
+	timelapses := make([]models.Timelapse, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -56,6 +61,7 @@ func ListTimelapses(c *gin.Context) {
 
 		info, err := entry.Info()
 		if err != nil {
+			log.Printf("timelapses: failed to stat %s: %v", name, err)
 			continue
 		}
 
@@ -69,12 +75,12 @@ func ListTimelapses(c *gin.Context) {
 		thumbName := baseName + ".jpg"
 		thumbURL := ""
 		if thumbnails[thumbName] {
-			thumbURL = "/videos/thumbnail/" + thumbName
+			thumbURL = "/videos/thumbnail/" + url.PathEscape(thumbName)
 		}
 
 		timelapses = append(timelapses, models.Timelapse{
 			Filename:     name,
-			URL:          "/videos/" + name,
+			URL:          "/videos/" + url.PathEscape(name),
 			ThumbnailURL: thumbURL,
 			Size:         info.Size(),
 			Date:         date,
@@ -90,7 +96,7 @@ func ListTimelapses(c *gin.Context) {
 }
 
 func parseDateFromFilename(name string) time.Time {
-	matches := datePattern.FindStringSubmatch(name)
+	matches := filenameDateRegex.FindStringSubmatch(name)
 	if len(matches) < 3 {
 		return time.Time{}
 	}

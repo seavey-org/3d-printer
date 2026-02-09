@@ -12,13 +12,12 @@ import (
 	"github.com/codyseavey/3d-printer/backend/internal/handlers"
 )
 
-func SetupRouter() *gin.Engine {
+func SetupRouter(timelapse *handlers.TimelapseHandler, stream *handlers.StreamHandler) *gin.Engine {
 	router := gin.Default()
 
 	frontendPath := os.Getenv("FRONTEND_DIST_PATH")
 	serveFrontend := frontendPath != "" && dirExists(frontendPath)
 
-	// CORS config for local dev
 	config := cors.DefaultConfig()
 	if corsOrigins := os.Getenv("CORS_ALLOWED_ORIGINS"); corsOrigins != "" {
 		config.AllowOrigins = strings.Split(corsOrigins, ",")
@@ -29,17 +28,14 @@ func SetupRouter() *gin.Engine {
 	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept"}
 	router.Use(cors.New(config))
 
-	// Health check
 	router.GET("/health", handlers.Health)
 
-	// API routes
-	api := router.Group("/api")
+	apiGroup := router.Group("/api")
 	{
-		api.GET("/timelapses", handlers.ListTimelapses)
-		api.GET("/stream/status", handlers.StreamStatus)
+		apiGroup.GET("/timelapses", timelapse.List)
+		apiGroup.GET("/stream/status", stream.Status)
 	}
 
-	// Serve frontend static files
 	if serveFrontend {
 		indexPath := filepath.Join(frontendPath, "index.html")
 
@@ -49,11 +45,11 @@ func SetupRouter() *gin.Engine {
 			c.File(indexPath)
 		})
 
-		// SPA fallback
+		// SPA fallback (exclude API and nginx-served paths)
 		router.NoRoute(func(c *gin.Context) {
 			path := c.Request.URL.Path
 
-			if strings.HasPrefix(path, "/api") {
+			if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/live") || strings.HasPrefix(path, "/videos") {
 				c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 				return
 			}

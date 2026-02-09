@@ -1,5 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    title?: string
+  }
+}
+
 const CameraView = () => import('./views/CameraView.vue')
 const TimelapsesView = () => import('./views/TimelapsesView.vue')
 const NotFound = () => import('./views/NotFound.vue')
@@ -35,8 +41,7 @@ const router = createRouter({
 })
 
 router.beforeEach((to, _from, next) => {
-  const title = to.meta.title ? `${to.meta.title} - Printer` : 'Printer'
-  document.title = title as string
+  document.title = to.meta.title ? `${to.meta.title} - Printer` : 'Printer'
   next()
 })
 

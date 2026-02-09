@@ -14,20 +14,22 @@ import (
 )
 
 func main() {
-	// Configure handlers from env
 	timelapseDir := os.Getenv("TIMELAPSE_DIR")
 	if timelapseDir == "" {
 		timelapseDir = "./videos"
 	}
-	handlers.InitTimelapseHandler(timelapseDir)
+	if _, err := os.Stat(timelapseDir); err != nil {
+		log.Printf("WARNING: timelapse directory %s does not exist: %v", timelapseDir, err)
+	}
 
 	streamPath := os.Getenv("STREAM_M3U8_PATH")
 	if streamPath == "" {
 		streamPath = "./live/stream.m3u8"
 	}
-	handlers.InitStreamHandler(streamPath)
 
-	router := api.SetupRouter()
+	timelapse := handlers.NewTimelapseHandler(timelapseDir)
+	stream := handlers.NewStreamHandler(streamPath)
+	router := api.SetupRouter(timelapse, stream)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -35,8 +37,12 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: router,
+		Addr:              ":" + port,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {

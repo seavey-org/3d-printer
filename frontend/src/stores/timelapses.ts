@@ -18,13 +18,14 @@ export const useTimelapsesStore = defineStore('timelapses', {
 
   getters: {
     filteredItems: (state): Timelapse[] => {
-      // Filter out tiny files (failed captures)
-      let items = state.allItems.filter(t => t.size >= MIN_FILE_SIZE)
+      const items = state.allItems.filter(t => t.size >= MIN_FILE_SIZE)
 
-      // Sort
-      if (state.sortOrder === 'oldest') {
-        items = [...items].reverse()
-      }
+      // Explicit sort by date instead of relying on backend order
+      items.sort((a, b) => {
+        const dateA = new Date(a.date).getTime()
+        const dateB = new Date(b.date).getTime()
+        return state.sortOrder === 'newest' ? dateB - dateA : dateA - dateB
+      })
 
       return items
     },
@@ -48,7 +49,8 @@ export const useTimelapsesStore = defineStore('timelapses', {
       this.loading = true
       this.error = null
       try {
-        this.allItems = await getTimelapses()
+        const data = await getTimelapses()
+        this.allItems = Array.isArray(data) ? data : []
       } catch (err) {
         this.error = err instanceof Error ? err.message : 'Failed to load timelapses'
       } finally {

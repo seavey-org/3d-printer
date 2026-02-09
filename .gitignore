@@ -20,6 +20,7 @@ frontend/dist/
 
 # Go
 backend/server
+backend/coverage.out
 
 # Docker
 *.log

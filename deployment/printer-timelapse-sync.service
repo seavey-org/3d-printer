@@ -3,5 +3,7 @@ Description=Sync timelapse videos from Bambu printer via FTPS
 
 [Service]
 Type=oneshot
+User=cody
 EnvironmentFile=/opt/3d-printer/.env.secrets
 ExecStart=/opt/3d-printer/deployment/printer-timelapse-sync.sh
+TimeoutStartSec=600

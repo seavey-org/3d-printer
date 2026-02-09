@@ -1,34 +1,34 @@
 [Unit]
 Description=FFmpeg RTSP Printer Stream Service
 After=network.target
-StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+User=cody
 Restart=always
 RestartSec=5
-StartLimitBurst=0
+
+# Rate limit: max 20 restarts in 5 minutes, then stop trying
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
 TimeoutStartSec=30
 TimeoutStopSec=10
 KillMode=mixed
 KillSignal=SIGTERM
-
-RestartKillSignal=SIGKILL
 
 # Resource limits
 MemoryMax=1G
 CPUQuota=200%
 
 WorkingDirectory=/var/www/printer-camera/live
-Environment=FFREPORT=file=/var/log/ffmpeg-printer-stream.log:level=32
 EnvironmentFile=/opt/3d-printer/.env.secrets
 
-# Key changes from the old config:
-# 1. -timeout 5000000: 5s RTSP socket I/O timeout (catches hung connections)
-# 2. -f hls instead of -f segment: proper HLS muxer with lifecycle management
-# 3. -hls_time 2: 2s segments instead of 10s (reduces latency from ~50s to ~6s)
-# 4. -hls_flags delete_segments: auto-cleanup of old .ts files
-# 5. -hls_list_size 5: keep 5 segments in playlist (10s of content)
+# -timeout 5000000: 5s RTSP socket I/O timeout (catches hung connections)
+# -f hls: proper HLS muxer with lifecycle management
+# -hls_time 2: 2s segments (reduces latency from ~50s to ~6s)
+# -hls_flags delete_segments: auto-cleanup of old .ts files
+# -hls_list_size 5: keep 5 segments in playlist (10s of content)
 ExecStart=/usr/bin/ffmpeg \
   -loglevel info \
   -timeout 5000000 \

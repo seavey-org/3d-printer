@@ -3,9 +3,17 @@ import { defineStore } from 'pinia'
 const STORAGE_KEY = 'printer-theme'
 type ThemeMode = 'system' | 'light' | 'dark'
 
+function getStoredTheme(): ThemeMode {
+  try {
+    return (localStorage.getItem(STORAGE_KEY) || 'system') as ThemeMode
+  } catch {
+    return 'system'
+  }
+}
+
 export const useThemeStore = defineStore('theme', {
   state: () => ({
-    currentTheme: (localStorage.getItem(STORAGE_KEY) || 'system') as ThemeMode
+    currentTheme: getStoredTheme()
   }),
 
   getters: {

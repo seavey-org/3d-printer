@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import ThemeToggle from './ThemeToggle.vue'
 
+const route = useRoute()
 const mobileMenuOpen = ref(false)
+
+// Close mobile menu on route change (e.g. browser back/forward)
+watch(() => route.path, () => {
+  mobileMenuOpen.value = false
+})
 </script>
 
 <template>
@@ -34,8 +41,10 @@ const mobileMenuOpen = ref(false)
           <button
             @click="mobileMenuOpen = !mobileMenuOpen"
             class="text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+            aria-label="Toggle navigation menu"
+            :aria-expanded="mobileMenuOpen"
           >
-            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path
                 v-if="!mobileMenuOpen"
                 stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -57,12 +66,10 @@ const mobileMenuOpen = ref(false)
         <router-link
           to="/camera"
           class="block px-3 py-2 rounded-md text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-          @click="mobileMenuOpen = false"
         >Camera</router-link>
         <router-link
           to="/timelapses"
           class="block px-3 py-2 rounded-md text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-          @click="mobileMenuOpen = false"
         >Timelapses</router-link>
       </div>
     </div>

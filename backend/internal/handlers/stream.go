@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -10,15 +11,18 @@ import (
 	"github.com/codyseavey/3d-printer/backend/internal/models"
 )
 
-var streamM3U8Path string
-
-func InitStreamHandler(m3u8Path string) {
-	streamM3U8Path = m3u8Path
+type StreamHandler struct {
+	m3u8Path string
 }
 
-func StreamStatus(c *gin.Context) {
-	info, err := os.Stat(streamM3U8Path)
+func NewStreamHandler(m3u8Path string) *StreamHandler {
+	return &StreamHandler{m3u8Path: m3u8Path}
+}
+
+func (h *StreamHandler) Status(c *gin.Context) {
+	info, err := os.Stat(h.m3u8Path)
 	if err != nil {
+		log.Printf("stream status: cannot stat %s: %v", h.m3u8Path, err)
 		c.JSON(http.StatusOK, models.StreamStatus{
 			Online:      false,
 			LastUpdated: time.Time{},

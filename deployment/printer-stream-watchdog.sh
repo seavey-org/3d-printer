@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 # Watchdog for ffmpeg printer stream
 # Checks if stream.m3u8 is stale (>60s old) and restarts ffmpeg if so.
 # Runs via systemd timer every 30 seconds.

@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia'
 import { getStreamStatus } from '../services/api'
 
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let visibilityHandler: (() => void) | null = null
+
 export const useCameraStore = defineStore('camera', {
   state: () => ({
     online: false,
     lastUpdated: '',
     loading: false,
-    pollTimer: null as ReturnType<typeof setInterval> | null
   }),
 
   actions: {
@@ -26,13 +28,32 @@ export const useCameraStore = defineStore('camera', {
     startPolling() {
       this.stopPolling()
       this.fetchStatus()
-      this.pollTimer = setInterval(() => this.fetchStatus(), 10_000)
+      pollTimer = setInterval(() => this.fetchStatus(), 10_000)
+
+      // Pause polling when tab is hidden, resume when visible
+      visibilityHandler = () => {
+        if (document.hidden) {
+          if (pollTimer) {
+            clearInterval(pollTimer)
+            pollTimer = null
+          }
+        } else {
+          if (pollTimer) clearInterval(pollTimer)
+          this.fetchStatus()
+          pollTimer = setInterval(() => this.fetchStatus(), 10_000)
+        }
+      }
+      document.addEventListener('visibilitychange', visibilityHandler)
     },
 
     stopPolling() {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer)
-        this.pollTimer = null
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
+      if (visibilityHandler) {
+        document.removeEventListener('visibilitychange', visibilityHandler)
+        visibilityHandler = null
       }
     }
   }

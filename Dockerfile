@@ -25,14 +25,22 @@ FROM alpine:3.21
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && \
+    addgroup -S appgroup && adduser -S appuser -G appgroup
 
 COPY --from=backend-builder /app/server .
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
+
+RUN chown -R appuser:appgroup /app
+
+USER appuser
 
 ENV PORT=8080
 ENV FRONTEND_DIST_PATH=/app/frontend/dist
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --spider -q http://localhost:8080/health || exit 1
 
 CMD ["./server"]

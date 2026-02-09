@@ -8,6 +8,7 @@ defineProps<{
 <template>
   <div class="flex items-center space-x-2">
     <span
+      aria-hidden="true"
       class="h-3 w-3 rounded-full"
       :class="{
         'bg-green-500': online && !connecting,
