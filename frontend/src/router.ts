@@ -22,7 +22,7 @@ const routes = [
     meta: { title: 'Camera' }
   },
   {
-    path: '/timelapses',
+    path: '/timelapses/:filename?',
     name: 'Timelapses',
     component: TimelapsesView,
     meta: { title: 'Timelapses' }

@@ -162,6 +162,17 @@ func TestSPAFallback(t *testing.T) {
 		t.Errorf("expected SPA html for SPA route, got %s", w.Body.String())
 	}
 
+	// Deep link to a specific timelapse should fallback to index.html
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/timelapses/video_2024-07-24_09-14-01.mp4", nil)
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /timelapses/<filename>, got %d", w.Code)
+	}
+	if w.Body.String() != "<html>SPA</html>" {
+		t.Errorf("expected SPA html for timelapse deep link, got %s", w.Body.String())
+	}
+
 	// /api/* should NOT fallback to SPA
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/nonexistent", nil)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useTimelapsesStore } from '../stores/timelapses'
 import TimelapseCard from '../components/TimelapseCard.vue'
 import VideoModal from '../components/VideoModal.vue'
@@ -7,11 +8,37 @@ import Pagination from '../components/Pagination.vue'
 import type { Timelapse } from '../types/timelapse'
 
 const store = useTimelapsesStore()
-const selectedTimelapse = ref<Timelapse | null>(null)
+const route = useRoute()
+const router = useRouter()
+
+// Route is the single source of truth for which timelapse is selected.
+// The computed derives the modal state from the URL, no watchers needed.
+const selectedTimelapse = computed<Timelapse | null>(() => {
+  const param = route.params.filename
+  const filename = typeof param === 'string' ? param : ''
+  if (!filename) return null
+  // Search filteredItems so we don't open modals for items hidden by the size filter
+  return store.filteredItems.find(t => t.filename === filename) || null
+})
+
+function selectTimelapse(timelapse: Timelapse) {
+  router.replace({
+    name: 'Timelapses',
+    params: { filename: timelapse.filename }
+  })
+}
+
+function closeModal() {
+  router.replace({ name: 'Timelapses' })
+}
+
+async function refreshTimelapses() {
+  await store.fetchTimelapses()
+}
 
 onMounted(() => {
   if (store.allItems.length === 0) {
-    store.fetchTimelapses()
+    refreshTimelapses()
   }
 })
 </script>
@@ -48,7 +75,7 @@ onMounted(() => {
     <div v-else-if="store.error" class="text-center py-20">
       <p class="text-red-500 dark:text-red-400">{{ store.error }}</p>
       <button
-        @click="store.fetchTimelapses()"
+        @click="refreshTimelapses()"
         class="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
       >Retry</button>
     </div>
@@ -67,7 +94,7 @@ onMounted(() => {
         v-for="t in store.paginatedItems"
         :key="t.filename"
         :timelapse="t"
-        @select="selectedTimelapse = $event"
+        @select="selectTimelapse($event)"
       />
     </div>
 
@@ -81,7 +108,7 @@ onMounted(() => {
     <!-- Video Modal -->
     <VideoModal
       :timelapse="selectedTimelapse"
-      @close="selectedTimelapse = null"
+      @close="closeModal"
     />
   </div>
 </template>
