@@ -25,9 +25,14 @@ on:
         default: true
         type: boolean
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/seavey-org/3d-printer
+
 jobs:
   check-changes:
-    runs-on: [self-hosted, fedora]
+    runs-on:
+      group: homelab-runners
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
@@ -52,7 +57,8 @@ jobs:
 
   # ============== BACKEND ==============
   lint-backend:
-    runs-on: [self-hosted, fedora]
+    runs-on:
+      group: homelab-runners
     needs: check-changes
     if: needs.check-changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
     defaults:
@@ -67,7 +73,8 @@ jobs:
           golangci-lint run --timeout=5m
 
   test-backend:
-    runs-on: [self-hosted, fedora]
+    runs-on:
+      group: homelab-runners
     needs: check-changes
     if: needs.check-changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
     defaults:
@@ -82,7 +89,8 @@ jobs:
 
   # ============== FRONTEND ==============
   lint-build-frontend:
-    runs-on: [self-hosted, fedora]
+    runs-on:
+      group: homelab-runners
     needs: check-changes
     if: needs.check-changes.outputs.frontend == 'true' || needs.check-changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
     defaults:
@@ -99,62 +107,121 @@ jobs:
       - name: Build
         run: npm run build
 
-  # ============== BUILD & DEPLOY (all on the same production server) ==============
-  build-deploy:
-    runs-on: [self-hosted, fedora]
+  # ============== DOCKER BUILD & PUSH ==============
+  build-push-app:
+    runs-on: ubuntu-latest
     needs: [check-changes, lint-backend, lint-build-frontend, test-backend]
     if: |
       always() &&
-      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy)) &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.ref == 'refs/heads/main' &&
       (needs.lint-backend.result == 'success' || needs.lint-backend.result == 'skipped') &&
       (needs.lint-build-frontend.result == 'success' || needs.lint-build-frontend.result == 'skipped') &&
       (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped')
-    environment: production
-    env:
-      APP_DIR: "/opt/3d-printer"
-      IMAGE_TAG: ${{ github.sha }}
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image locally
-        run: docker build -t 3d-printer-app:${{ github.sha }} -t 3d-printer-app:latest .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Copy deployment files
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (app)
+        id: meta-app
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/app
+          tags: |
+            type=sha,prefix=,format=long
+            type=raw,value=latest
+
+      - name: Build and push app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta-app.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,ignore-error=true
+
+  # ============== DEPLOY (SSH to production server) ==============
+  deploy:
+    runs-on:
+      group: homelab-runners
+    needs: [check-changes, build-push-app]
+    if: |
+      always() &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deploy)) &&
+      github.ref == 'refs/heads/main' &&
+      (needs.build-push-app.result == 'success' || needs.build-push-app.result == 'skipped')
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PROD_HOST: "192.168.86.227"
+      PROD_USER: "cody"
+      APP_DIR: "/opt/3d-printer"
+      IMAGE_TAG: ${{ github.sha }}
+      SSH_OPTS: "-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy deployment files to production
         run: |
-          mkdir -p $APP_DIR/deployment
-          cp docker-compose.yml $APP_DIR/
-          cp deployment/*.service deployment/*.timer deployment/*.conf deployment/*.sh $APP_DIR/deployment/ 2>/dev/null || true
-          echo "IMAGE_TAG=${{ github.sha }}" > $APP_DIR/.env.deploy
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "sudo mkdir -p ${APP_DIR} && sudo chown \$(whoami) ${APP_DIR}"
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "mkdir -p ${APP_DIR}/deployment"
+          scp ${SSH_OPTS} docker-compose.yml ${PROD_USER}@${PROD_HOST}:${APP_DIR}/
+          scp ${SSH_OPTS} deployment/*.service deployment/*.timer deployment/*.conf deployment/*.sh ${PROD_USER}@${PROD_HOST}:${APP_DIR}/deployment/ 2>/dev/null || true
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "echo 'IMAGE_TAG=${{ github.sha }}' > ${APP_DIR}/.env.deploy"
 
-      - name: Write secrets file
+      - name: Write secrets file on production
         env:
           PRINTER_RTSP_URL: ${{ secrets.PRINTER_RTSP_URL }}
           PRINTER_FTP_HOST: ${{ secrets.PRINTER_FTP_HOST }}
           PRINTER_FTP_USER: ${{ secrets.PRINTER_FTP_USER }}
           PRINTER_FTP_PASSWORD: ${{ secrets.PRINTER_FTP_PASSWORD }}
         run: |
-          printf 'PRINTER_RTSP_URL=%s\nPRINTER_FTP_HOST=%s\nPRINTER_FTP_USER=%s\nPRINTER_FTP_PASSWORD=%s\n' \
-            "$PRINTER_RTSP_URL" "$PRINTER_FTP_HOST" "$PRINTER_FTP_USER" "$PRINTER_FTP_PASSWORD" \
-            > $APP_DIR/.env.secrets
-          chmod 600 $APP_DIR/.env.secrets
+          SECRETS_FILE=$(mktemp)
+          {
+            printf 'PRINTER_RTSP_URL=%s\n' "${PRINTER_RTSP_URL}"
+            printf 'PRINTER_FTP_HOST=%s\n' "${PRINTER_FTP_HOST}"
+            printf 'PRINTER_FTP_USER=%s\n' "${PRINTER_FTP_USER}"
+            printf 'PRINTER_FTP_PASSWORD=%s\n' "${PRINTER_FTP_PASSWORD}"
+          } > "$SECRETS_FILE"
+          scp ${SSH_OPTS} "$SECRETS_FILE" ${PROD_USER}@${PROD_HOST}:${APP_DIR}/.env.secrets
+          rm -f "$SECRETS_FILE"
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "chmod 600 ${APP_DIR}/.env.secrets"
+
+      - name: Login to GHCR on production
+        run: |
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "echo '${{ github.token }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+
+      - name: Pre-pull image on production
+        run: |
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "docker pull ghcr.io/seavey-org/3d-printer/app:${{ github.sha }}"
 
       - name: Deploy
         run: |
-          cd $APP_DIR
-
-          # Update compose to use local image
-          IMAGE_TAG=${{ github.sha }} docker compose down --remove-orphans || true
-          docker rm -f printer-backend 2>/dev/null || true
-
-          IMAGE_TAG=${{ github.sha }} docker compose up -d
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "cd ${APP_DIR} && IMAGE_TAG=${{ github.sha }} docker compose down --remove-orphans || true"
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "docker rm -f printer-backend 2>/dev/null || true"
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "cd ${APP_DIR} && IMAGE_TAG=${{ github.sha }} docker compose up -d"
 
       - name: Verify health
         run: |
           sleep 5
-          cd $APP_DIR && docker compose ps
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "cd ${APP_DIR} && docker compose ps"
           for i in 1 2 3; do
-            curl -sf http://localhost:3086/health && echo " - Health OK" && exit 0
+            ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "curl -sf http://localhost:3086/health" && echo " - Health OK" && exit 0
             echo "Attempt $i failed, retrying..." && sleep 3
           done
           echo "Health check failed after 3 attempts!" && exit 1
@@ -162,38 +229,35 @@ jobs:
       - name: Setup systemd/nginx (if changed)
         if: needs.check-changes.outputs.deployment == 'true'
         run: |
-          # Docker compose service
-          sudo cp $APP_DIR/deployment/printer-docker.service /etc/systemd/system/
-          sudo systemctl daemon-reload && sudo systemctl enable printer-docker
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "
+            sudo cp ${APP_DIR}/deployment/printer-docker.service /etc/systemd/system/
+            sudo systemctl daemon-reload && sudo systemctl enable printer-docker
 
-          # ffmpeg stream service
-          sudo cp $APP_DIR/deployment/ffmpeg-printer-stream.service /etc/systemd/system/
-          sudo systemctl daemon-reload && sudo systemctl restart ffmpeg-printer-stream
+            sudo cp ${APP_DIR}/deployment/ffmpeg-printer-stream.service /etc/systemd/system/
+            sudo systemctl daemon-reload && sudo systemctl restart ffmpeg-printer-stream
 
-          # Stream watchdog
-          sudo cp $APP_DIR/deployment/printer-stream-watchdog.service /etc/systemd/system/
-          sudo cp $APP_DIR/deployment/printer-stream-watchdog.timer /etc/systemd/system/
-          sudo chmod +x $APP_DIR/deployment/printer-stream-watchdog.sh
-          sudo systemctl daemon-reload
-          sudo systemctl enable --now printer-stream-watchdog.timer
+            sudo cp ${APP_DIR}/deployment/printer-stream-watchdog.service /etc/systemd/system/
+            sudo cp ${APP_DIR}/deployment/printer-stream-watchdog.timer /etc/systemd/system/
+            sudo chmod +x ${APP_DIR}/deployment/printer-stream-watchdog.sh
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now printer-stream-watchdog.timer
 
-          # Timelapse sync
-          sudo cp $APP_DIR/deployment/printer-timelapse-sync.service /etc/systemd/system/
-          sudo cp $APP_DIR/deployment/printer-timelapse-sync.timer /etc/systemd/system/
-          sudo chmod +x $APP_DIR/deployment/printer-timelapse-sync.sh
-          sudo systemctl daemon-reload
-          sudo systemctl enable --now printer-timelapse-sync.timer
+            sudo cp ${APP_DIR}/deployment/printer-timelapse-sync.service /etc/systemd/system/
+            sudo cp ${APP_DIR}/deployment/printer-timelapse-sync.timer /etc/systemd/system/
+            sudo chmod +x ${APP_DIR}/deployment/printer-timelapse-sync.sh
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now printer-timelapse-sync.timer
 
-          # nginx
-          sudo cp $APP_DIR/deployment/printer.seavey.dev.conf /etc/nginx/sites-available/
-          sudo ln -sf /etc/nginx/sites-available/printer.seavey.dev.conf /etc/nginx/sites-enabled/
-          sudo nginx -t && sudo systemctl reload nginx
+            sudo cp ${APP_DIR}/deployment/printer.seavey.dev.conf /etc/nginx/sites-available/
+            sudo ln -sf /etc/nginx/sites-available/printer.seavey.dev.conf /etc/nginx/sites-enabled/
+            sudo nginx -t && sudo systemctl reload nginx
+          "
 
       - name: Clean up old images
-        run: docker images '3d-printer-app' --format '{{.ID}} {{.CreatedAt}}' | sort -k2 -r | tail -n +4 | awk '{print $1}' | xargs -r docker rmi || true
+        run: ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "docker image prune -af --filter 'until=168h' || true"
 
       - name: Summary
         run: |
           echo "=== Deployed ${{ github.sha }} ==="
           echo "URL: https://printer.seavey.dev"
-          cd $APP_DIR && docker compose ps
+          ssh ${SSH_OPTS} ${PROD_USER}@${PROD_HOST} "cd ${APP_DIR} && docker compose ps"

@@ -1,6 +1,6 @@
 # 3D Printer Dashboard - Docker Compose
 #
-# Production (built and run on same server):
+# Production (pull from GHCR):
 #   IMAGE_TAG=<commit-sha> docker compose up -d
 #
 # Data is served via bind mounts from host filesystem:
@@ -9,7 +9,7 @@
 
 services:
   app:
-    image: 3d-printer-app:${IMAGE_TAG:-latest}
+    image: ghcr.io/seavey-org/3d-printer/app:${IMAGE_TAG:-latest}
     container_name: printer-backend
     ports:
       - "127.0.0.1:3086:8080"
